@@ -452,6 +452,7 @@ async function auction(i) {
     const active = part.filter(p => !passed.has(p.k)); if (active.length <= 1 && (leader >= 0 || active.length === 0)) break;
     if (active.length === 1 && leader === active[0].k) break;
     const p = active[turn % active.length]; turn++;
+    if (p.human && leader === 0) { await sleep(120); continue; } // already the high bidder: nothing to do until someone outbids
     if (p.human) {
       const myMax = p.cash; const act = await openDialog({ w: 380, h: 250, title: 'Auction: ' + s.n, bw: 82,
         buttons: [{ label: '+' + money(10), val: 10, on: bid + 10 <= myMax && leader !== 0 }, { label: '+' + money(50), val: 50, on: bid + 50 <= myMax && leader !== 0 }, { label: 'Pass', val: -1, on: leader !== 0 }],
