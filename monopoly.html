@@ -61,7 +61,7 @@ const GROUPS = GRP.map((_, gi) => SP.filter(s => s.t === 'p' && s.g === gi).map(
 const isProp = i => SP[i].t === 'p' || SP[i].t === 'rr' || SP[i].t === 'ut';
 const money = v => '₥' + (v / 100).toFixed(2) + 'M';
 
-const CORN = [['cGO', 292, 384.5, 1.14], ['cFP', 292, 18.5, 1.14], ['cJ', 17, 204, 1.45], ['cGTJ', 567, 204, 1.45]]; // corner sprite centres in board coords (from the hole positions in board.jpg)
+const CORN = [['cGO', 292, 384.5, .86], ['cFP', 292, 18.5, .86], ['cJ', 17, 204, 1.08], ['cGTJ', 567, 204, 1.08]]; // corner sprite centres in board coords (from the hole positions in board.jpg)
 // ---------- geometry (isometric 11x11 lattice) ----------
 const DX = 584 / 22, DY = 408 / 22, OX = BX + 292, OY = 408;
 function cellPQ(i) { return i <= 10 ? [i, 0] : i <= 20 ? [10, i - 10] : i <= 30 ? [30 - i, 10] : [0, 40 - i]; }
@@ -80,14 +80,17 @@ function hitCell(x, y) {
 const SEATS = [
   { col: '#3fae49', name: 'You', panel: 'br', piece: 15 }, { col: '#e8742a', name: 'Computer_2', panel: 'bl', piece: 1 },
   { col: '#e8c52a', name: 'Computer_3', panel: 'tl', piece: 2 }, { col: '#9a74d6', name: 'Computer_4', panel: 'tr', piece: 3 }];
+const ODEF = { limit: 'turn', rounds: 25, mins: 20, cash: 1500, fp: false, dblgo: false, auction: true, even: true, jailnorent: false, aitrade: true };
+let O = Object.assign({}, ODEF); try { Object.assign(O, JSON.parse(LS.get('mono.opts') || '{}')); } catch (e) {}
+const saveOpts = () => LS.set('mono.opts', JSON.stringify(O));
 let G = null;
 const ui = { btn: null, res: null, timer: 30, timerOn: false, hover: -1, sel: -1, dice: [0, 0], rolling: false, rollT: 0, bubble: null, msg: '', msgT: 0 };
 let D = null; // modal dialog
 function newGame() {
   epoch++; flush(); D = null; ui.btn = null; ui.res = null; ui.timer = 30; ui.timerOn = false; ui.dice = [0, 0]; ui.msg = ''; ui.bubble = null;
   const name = LS.get('mono.name') || 'You';
-  G = { players: SEATS.map((s, k) => ({ k, name: k === 0 ? name : s.name, col: s.col, panel: s.panel, piece: s.piece, human: k === 0, cash: 1500, pos: 0, jail: 0, cards: 0, out: false, doubles: 0, px: 0, py: 0, hop: 0, face: 0 })),
-    owner: new Array(40).fill(-1), houses: new Array(40).fill(0), mort: new Array(40).fill(false), cur: 0, first: 0, round: 1, maxRounds: +(LS.get('mono.rounds') || 25), log: [], over: false, chance: shuf([...Array(16).keys()]), chest: shuf([...Array(16).keys()]) };
+  G = { players: SEATS.map((s, k) => ({ k, name: k === 0 ? name : s.name, col: s.col, panel: s.panel, piece: s.piece, human: k === 0, cash: O.cash, pos: 0, jail: 0, cards: 0, out: false, doubles: 0, px: 0, py: 0, hop: 0, face: 0 })),
+    owner: new Array(40).fill(-1), houses: new Array(40).fill(0), mort: new Array(40).fill(false), cur: 0, first: 0, round: 1, maxRounds: O.limit === 'turn' ? O.rounds : Infinity, pot: 0, t0: 0, log: [], over: false, chance: shuf([...Array(16).keys()]), chest: shuf([...Array(16).keys()]) };
   G.players.forEach(p => { const c = cellC(0); p.px = c[0]; p.py = c[1]; });
   flowMain().catch(e => { if (e !== CANCEL) console.error(e); });
 }
@@ -107,9 +110,9 @@ const mortVal = i => SP[i].price / 2, unmortCost = i => Math.ceil(SP[i].price / 
 function canBuild(p, i) {
   const s = SP[i]; if (s.t !== 'p' || G.owner[i] !== p.k || !owns(p, s.g)) return false;
   if (GROUPS[s.g].some(j => G.mort[j])) return false; const hs = GROUPS[s.g].map(j => G.houses[j]);
-  return G.houses[i] < 5 && G.houses[i] === Math.min(...hs) && p.cash >= s.h;
+  return G.houses[i] < 5 && (!O.even || G.houses[i] === Math.min(...hs)) && p.cash >= s.h;
 }
-function canSell(p, i) { const s = SP[i]; if (s.t !== 'p' || G.owner[i] !== p.k || G.houses[i] === 0) return false; return G.houses[i] === Math.max(...GROUPS[s.g].map(j => G.houses[j])); }
+function canSell(p, i) { const s = SP[i]; if (s.t !== 'p' || G.owner[i] !== p.k || G.houses[i] === 0) return false; return !O.even || G.houses[i] === Math.max(...GROUPS[s.g].map(j => G.houses[j])); }
 function groupBuilt(i) { const s = SP[i]; return s.t === 'p' && GROUPS[s.g].some(j => G.houses[j] > 0); }
 function canMort(p, i) { return G.owner[i] === p.k && !G.mort[i] && !groupBuilt(i) && isProp(i); }
 function canUnmort(p, i) { return G.owner[i] === p.k && G.mort[i] && p.cash >= unmortCost(i); }
@@ -214,13 +217,13 @@ async function firstRoll() {
 function tradable(p, i) { const s = SP[i]; if (G.owner[i] !== p.k) return false; if (s.t === 'p' && GROUPS[s.g].some(j => G.houses[j] > 0)) return false; return true; }
 function tradeVal(i, to) {
   const s = SP[i]; let v = s.price * (G.mort[i] ? .7 : 1);
-  if (s.t === 'p') { const n = GROUPS[s.g].length, mine = GROUPS[s.g].filter(j => G.owner[j] === to.k).length; if (mine === n - 1) v *= 1.9; else if (mine > 0) v *= 1.2; }
+  if (s.t === 'p') { const n = GROUPS[s.g].length, mine = GROUPS[s.g].filter(j => j !== i && G.owner[j] === to.k).length; if (mine === n - 1) v *= 1.9; else if (mine > 0) v *= 1.2; }
   else if (s.t === 'rr') v *= 1 + .2 * countOwned(to, 'rr');
   return v;
 }
 function aiAcceptsTrade(q, me, offer) { // offer.give = what human gives to q ; offer.get = what q gives to human
   let gain = offer.give.cash + offer.give.cards * 50, loss = offer.get.cash + offer.get.cards * 50;
-  offer.give.props.forEach(i => { gain += tradeVal(i, q); }); offer.get.props.forEach(i => { loss += Math.max(tradeVal(i, q), tradeVal(i, me)); });
+  offer.give.props.forEach(i => { gain += tradeVal(i, q); }); offer.get.props.forEach(i => { loss += Math.max(tradeVal(i, q), .8 * tradeVal(i, me)); });
   if (gain + loss === 0) return false; return gain >= loss * 1.1 + 5;
 }
 function validOffer(me, q, o) {
@@ -282,18 +285,70 @@ async function aiProposeTrade(p) {
       return;
     } }
 }
+
+function limitText() {
+  if (O.limit === 'time') { const ms = Math.max(0, O.mins * 60000 - (G.t0 ? gclock - G.t0 : 0)), sec = Math.ceil(ms / 1000); return 'Round ' + G.round + ' · ' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + ' left'; }
+  if (O.limit === 'turn') return 'Round ' + Math.min(G.round, G.maxRounds) + ' / ' + G.maxRounds;
+  return 'Round ' + G.round + ' (no limit)';
+}
+// ---------- game options ----------
+function chip(label, x, y, w, h, on, act, o = {}) {
+  D.rects.push({ x, y, w, h, act }); const hov = inR(ptr, x, y, w, h);
+  const gr = g.createLinearGradient(0, y, 0, y + h); if (on) { gr.addColorStop(0, '#ffe680'); gr.addColorStop(1, '#f0b020'); } else { gr.addColorStop(0, hov ? '#9bd8f0' : '#73b8d8'); gr.addColorStop(1, hov ? '#4a9cc4' : '#3b86ad'); }
+  g.fillStyle = gr; rr(x, y, w, h, 5); g.fill(); g.strokeStyle = on ? '#9a6a00' : '#1d5877'; g.lineWidth = 1.3; g.stroke();
+  T(label, x + w / 2, y + h / 2 + 1, { font: 'bold ' + (o.fs || 11) + 'px "Trebuchet MS",Arial', align: 'center', color: on ? '#3a2600' : '#fff', stroke: on ? null : '#1b4561', sw: 2 });
+}
+function check(label, x, y, w, on, act) {
+  D.rects.push({ x, y: y - 11, w, h: 22, act }); const hov = inR(ptr, x, y - 11, w, 22);
+  g.fillStyle = hov ? '#fff' : '#eef6fa'; rr(x, y - 8, 16, 16, 3); g.fill(); g.strokeStyle = '#1d5877'; g.lineWidth = 1.5; g.stroke();
+  if (on) { g.strokeStyle = '#1a8f3a'; g.lineWidth = 3; g.beginPath(); g.moveTo(x + 3, y); g.lineTo(x + 7, y + 4); g.lineTo(x + 13, y - 5); g.stroke(); }
+  T(label, x + 24, y + 1, { font: '11px "Trebuchet MS",Arial', stroke: '#1b4561', sw: 3 });
+}
+async function optionsDialog() {
+  const save = () => saveOpts();
+  await openDialog({ w: 600, h: 352, title: 'MONOPOLY World Edition — Game Options', bw: 130, buttons: [{ label: 'Start Game', val: 1 }],
+    draw: (x, y, w, h) => {
+      const c1 = x + 24, c2 = x + 212, c3 = x + 346, top = y + 52;
+      T('Game Limit', c1, top, { font: 'bold 12px "Trebuchet MS",Arial', stroke: '#1b4561', sw: 3 });
+      [['none', 'No Limit'], ['turn', 'Turn Limit'], ['time', 'Time Limit']].forEach(([k, l], i) => chip(l, c1, top + 14 + i * 30, 150, 24, O.limit === k, () => { O.limit = k; save(); }));
+      if (O.limit === 'turn') { T('Rounds', c1, top + 118, { font: '11px Arial' }); [15, 25, 40, 60].forEach((v, i) => chip('' + v, c1 + i * 38, top + 130, 34, 22, O.rounds === v, () => { O.rounds = v; save(); })); }
+      else if (O.limit === 'time') { T('Minutes', c1, top + 118, { font: '11px Arial' }); [10, 20, 30, 60].forEach((v, i) => chip('' + v, c1 + i * 38, top + 130, 34, 22, O.mins === v, () => { O.mins = v; save(); })); }
+      else tl('Play until only one\nplayer is left.', c1 + 70, top + 128, 14, { font: '11px Arial', align: 'center' });
+      T('Starting Cash', c2, top, { font: 'bold 12px "Trebuchet MS",Arial', stroke: '#1b4561', sw: 3 });
+      [1000, 1500, 2500, 5000].forEach((v, i) => chip(money(v), c2, top + 14 + i * 30, 110, 24, O.cash === v, () => { O.cash = v; save(); }));
+      T('House Rules', c3, top, { font: 'bold 12px "Trebuchet MS",Arial', stroke: '#1b4561', sw: 3 });
+      [['fp', 'Free Parking jackpot (fees & taxes)'], ['dblgo', 'Double salary when landing on GO'], ['auction', 'Auction unbought properties'], ['even', 'Build houses evenly'], ['jailnorent', 'No rent collected from Jail'], ['aitrade', 'Computers trade with each other']]
+        .forEach(([k, l], i) => check(l, c3, top + 24 + i * 27, 230, O[k], () => { O[k] = !O[k]; save(); }));
+      tl('Three computer opponents. Richest player when the limit ends wins.', x + w / 2, y + h - 66, 14, { font: '11px Arial', align: 'center', color: '#e6f2f8' });
+    } });
+}
+// computers trading with each other
+async function aiTradeAI(p) {
+  if (!O.aitrade || p.out || (p._lastAI || -99) > G.round - 3 || Math.random() > .5) return;
+  for (const gi in GROUPS) { const grp = GROUPS[gi]; if (grp.filter(j => G.owner[j] === p.k).length !== grp.length - 1) continue;
+    const need = grp.find(j => G.owner[j] !== p.k); const q = G.players[G.owner[need]]; if (!q || q.human || q.out || q === p || !tradable(q, need) || G.mort[need]) continue;
+    for (const mul of [1.4, 1.65, 1.9]) {
+      const price = Math.round(SP[need].price * mul / 10) * 10; if (p.cash - price < 120) break;
+      const o = { give: { props: [], cash: price, cards: 0 }, get: { props: [need], cash: 0, cards: 0 } };
+      if (aiAcceptsTrade(q, p, o) && validOffer(p, q, o)) {
+        p._lastAI = G.round; applyTrade(p, q, o);
+        await openDialog({ w: 380, h: 150, title: 'Computer trade', auto: 2600, autoVal: 1, draw: (x, y, w) => tl(p.name + ' bought ' + SP[need].n + '\nfrom ' + q.name + ' for ' + money(price) + '.', x + w / 2, y + 78, 20, { font: '13px Arial', align: 'center' }) });
+        return;
+      } }
+  }
+}
 // ---------- game flow ----------
 async function flowMain() {
   G.over = false; await sleep(500);
-  await openDialog({ w: 330, h: 190, title: 'MONOPOLY  The World Edition', bw: 120, buttons: [{ label: 'Start Game', val: 1 }],
-    draw: (x, y, w) => { tl('You vs. 3 computer players.\nStart with ' + money(1500) + ' each. Pass GO for ' + money(200) + '.\nThe richest player after ' + G.maxRounds + ' rounds wins,\nor be the last one standing!', x + w / 2, y + 88, 18, { font: '13px "Trebuchet MS",Arial', align: 'center' }); } });
+  await optionsDialog();
   snd('intromusic', .5);
-  await pickPieces(); await firstRoll();
+  await pickPieces(); await firstRoll(); G.t0 = gclock;
   while (!G.over) {
     const p = G.players[G.cur];
     if (!p.out) { if (G.cur === 0) { ui.timer = 30; } await takeTurn(p); }
     if (alive().length <= 1) break;
     G.cur = (G.cur + 1) % 4; if (G.cur === G.first) { G.round++; if (G.round > G.maxRounds) break; }
+    if (O.limit === 'time' && gclock - G.t0 >= O.mins * 60000) break;
   }
   await endGame();
 }
@@ -303,7 +358,7 @@ async function takeTurn(p) {
   for (;;) {
     if (p.out) return;
     if (p.jail > 0) { const stay = await jailTurn(p); if (stay === 'stay') return; }
-    if (!p.human) { await aiPrep(p); if (dbl === 0) await aiProposeTrade(p); }
+    if (!p.human) { await aiPrep(p); if (dbl === 0) { await aiProposeTrade(p); await aiTradeAI(p); } }
     const r = await rollFor(p, dbl);
     const dbls = r[0] === r[1];
     if (p.jail === 0 || p.jailJustFreed) {
@@ -340,7 +395,7 @@ async function jailTurn(p) {
 }
 async function jailChoice(p, ch) {
   if (ch === 'card') { p.cards--; p.jail = 0; p.jailJustFreed = true; log(p.name + ' used a Get Out of Jail Free card.'); snd('getoutofjail'); return 'free'; }
-  if (ch === 'pay') { p.cash -= 50; p.jail = 0; p.jailJustFreed = true; log(p.name + ' paid ' + money(50) + ' to leave Jail.'); snd('getoutofjail'); return 'free'; }
+  if (ch === 'pay') { p.cash -= 50; if (O.fp) G.pot += 50; p.jail = 0; p.jailJustFreed = true; log(p.name + ' paid ' + money(50) + ' to leave Jail.'); snd('getoutofjail'); return 'free'; }
   snd('rolldice'); ui.rolling = true; ui.rollT = gclock; await sleep(750); ui.rolling = false;
   const r = [1 + rnd(6), 1 + rnd(6)]; ui.dice = r; ui.strip = [1 + rnd(2), 1 + rnd(2)]; log(p.name + ' rolled ' + (r[0] + r[1]) + ' in Jail.'); await sleep(500);
   if (r[0] === r[1]) { p.jail = 0; log(p.name + ' rolled doubles and is free!'); snd('getoutofjail'); await moveBy(p, r[0] + r[1]); await landOn(p, r[0] + r[1]); return 'stay'; }
@@ -354,13 +409,14 @@ async function sendToJail(p) {
 async function hopTo(p, to, direct) {
   const a = cellC(p.pos), b = cellC(to); await tween(direct ? 450 : 170, t => { p.px = a[0] + (b[0] - a[0]) * t; p.py = a[1] + (b[1] - a[1]) * t; p.hop = Math.sin(Math.PI * t) * (direct ? 22 : 9); }); p.px = b[0]; p.py = b[1]; p.hop = 0;
 }
-async function moveBy(p, n) { for (let k = 0; k < n; k++) { const nx = (p.pos + 1) % 40; sndMove(); p.face = faceOf(p.pos); await hopTo(p, nx); p.pos = nx; if (nx === 0) { p.cash += 200; snd('passgo'); log(p.name + ' passed GO and collected ' + money(200) + '.'); ui.bubble = { t: gclock, txt: 'Pass GO', sub: 'collect ' + money(200) }; } } }
+async function moveBy(p, n) { for (let k = 0; k < n; k++) { const nx = (p.pos + 1) % 40; sndMove(); p.face = faceOf(p.pos); await hopTo(p, nx); p.pos = nx; if (nx === 0) { const bon = O.dblgo && k === n - 1 ? 200 : 0; p.cash += 200 + bon; snd('passgo'); log(p.name + ' passed GO and collected ' + money(200 + bon) + '.'); ui.bubble = { t: gclock, txt: bon ? 'Landed on GO' : 'Pass GO', sub: 'collect ' + money(200 + bon) }; } } }
 function faceOf(i) { const e = edgeOf(i); return [0, 1, 3, 2][e]; }
-async function moveTo(p, to, collect = true) { while (p.pos !== to) { const nx = (p.pos + 1) % 40; sndMove(); p.face = faceOf(p.pos); await hopTo(p, nx); p.pos = nx; if (nx === 0 && collect) { p.cash += 200; snd('passgo'); log(p.name + ' passed GO and collected ' + money(200) + '.'); ui.bubble = { t: gclock, txt: 'Pass GO', sub: 'collect ' + money(200) }; } } }
+async function moveTo(p, to, collect = true) { while (p.pos !== to) { const nx = (p.pos + 1) % 40; sndMove(); p.face = faceOf(p.pos); await hopTo(p, nx); p.pos = nx; if (nx === 0 && collect) { const bon = O.dblgo && nx === to ? 200 : 0; p.cash += 200 + bon; snd('passgo'); log(p.name + ' passed GO and collected ' + money(200 + bon) + '.'); ui.bubble = { t: gclock, txt: bon ? 'Landed on GO' : 'Pass GO', sub: 'collect ' + money(200 + bon) }; } } }
 
 async function landOn(p, dice) {
   const s = SP[p.pos]; ui.sel = p.pos;
-  if (s.t === 'go' || s.t === 'jail' || s.t === 'fp') { if (s.t === 'fp') log(p.name + ' is resting at Free Parking.'); return; }
+  if (s.t === 'fp') { if (O.fp && G.pot > 0) { p.cash += G.pot; snd('freeparking'); log(p.name + ' collected ' + money(G.pot) + ' from Free Parking!'); G.pot = 0; } else log(p.name + ' is resting at Free Parking.'); return; }
+  if (s.t === 'go' || s.t === 'jail') return;
   if (s.t === 'gtj') { log(p.name + ' goes to Jail!'); await sendToJail(p); return; }
   if (s.t === 'tax') { snd('taxsquare'); log(p.name + ' paid ' + s.n + ' of ' + money(s.tax) + '.'); await debit(p, s.tax, -1, s.n); return; }
   if (s.t === 'chance' || s.t === 'chest') { await drawCard(p, s.t); return; }
@@ -368,7 +424,7 @@ async function landOn(p, dice) {
   if (o === -1) { await offerProperty(p, p.pos); return; }
   if (o === p.k) return;
   if (G.mort[p.pos]) { log(p.name + ' landed on mortgaged ' + s.n + ' — no rent.'); snd('norent'); return; }
-  const own = G.players[o]; if (own.jail > 0 && false) return;
+  const own = G.players[o]; if (O.jailnorent && own.jail > 0) { log(own.name + ' is in Jail — no rent collected.'); snd('norentinjail'); return; }
   let rent = rentFor(p.pos, dice); if (G._double) rent = G._double === 'rr' ? rent * 2 : (countOwned(own, 'ut') === 2 ? 10 : 10) * dice;
   snd(rent > 500 ? 'rent5' : rent > 100 ? 'rent3' : 'rent1'); log(p.name + ' paid ' + money(rent) + ' rent to ' + own.name + ' for ' + s.n + '.');
   await debit(p, rent, o, 'rent');
@@ -376,10 +432,10 @@ async function landOn(p, dice) {
 async function offerProperty(p, i) {
   const s = SP[i]; let buy = false;
   if (p.human) {
-    if (p.cash < s.price) { await openDialog({ w: 320, h: 150, title: s.n, bw: 110, buttons: [{ label: 'Auction', val: 1 }], draw: (x, y, w) => tl('You cannot afford ' + money(s.price) + '.\nThe property goes to auction.', x + w / 2, y + 70, 18, { font: '13px Arial', align: 'center' }) }); }
-    else buy = (await openDialog({ w: 360, h: 244, title: 'Buy ' + s.n + '?', bw: 110, buttons: [{ label: 'Buy ' + money(s.price), val: 1 }, { label: 'Auction', val: 0 }], draw: (x, y, w, h) => propCard(i, x + 18, y + 40, 150) })) === 1;
+    if (p.cash < s.price) { await openDialog({ w: 320, h: 150, title: s.n, bw: 110, buttons: [{ label: O.auction ? 'Auction' : 'Okay', val: 1 }], draw: (x, y, w) => tl('You cannot afford ' + money(s.price) + '.\n' + (O.auction ? 'The property goes to auction.' : 'It stays unsold.'), x + w / 2, y + 70, 18, { font: '13px Arial', align: 'center' }) }); }
+    else buy = (await openDialog({ w: 360, h: 244, title: 'Buy ' + s.n + '?', bw: 110, buttons: [{ label: 'Buy ' + money(s.price), val: 1 }, { label: O.auction ? 'Auction' : 'Pass', val: 0 }], draw: (x, y, w, h) => propCard(i, x + 18, y + 40, 150) })) === 1;
   } else { await sleep(500); buy = aiBuy(p, i); }
-  if (buy) { buyProp(p, i, s.price); } else { snd('auctionstart'); log(s.n + ' goes to auction.'); await auction(i); }
+  if (buy) { buyProp(p, i, s.price); } else if (O.auction) { snd('auctionstart'); log(s.n + ' goes to auction.'); await auction(i); } else log(s.n + ' stays unsold.');
 }
 function buyProp(p, i, price) { p.cash -= price; G.owner[i] = p.k; snd('purchaseding'); ui.sel = i; log(p.name + ' bought ' + SP[i].n + ' for ' + money(price) + '.'); }
 function propValueFor(p, i) {
@@ -436,11 +492,11 @@ async function drawCard(p, kind) {
 
 // ---------- money / bankruptcy ----------
 async function debit(p, amt, cred, why) {
-  if (p.out) return; if (p.cash >= amt) { p.cash -= amt; if (cred >= 0) G.players[cred].cash += amt; return; }
+  if (p.out) return; if (p.cash >= amt) { p.cash -= amt; if (cred >= 0) G.players[cred].cash += amt; else if (O.fp) G.pot += amt; return; }
   const liq = liquidValue(p); if (liq + p.cash >= amt) {
     if (p.human) { snd('notenoughcash'); const r = await manageDialog(p, amt, cred); if (r === 'bankrupt') { await goBankrupt(p, cred); return; } }
     else aiLiquidate(p, amt);
-    if (p.cash >= amt) { p.cash -= amt; if (cred >= 0) G.players[cred].cash += amt; return; }
+    if (p.cash >= amt) { p.cash -= amt; if (cred >= 0) G.players[cred].cash += amt; else if (O.fp) G.pot += amt; return; }
   }
   await goBankrupt(p, cred);
 }
@@ -586,7 +642,7 @@ function drawCenter() {
   drawDice();
   // message line
   if (ui.msg && gclock - ui.msgT < 7000) T(ui.msg, BX + 292, 164, { font: '11px "Trebuchet MS",Arial', color: '#e8f1f7', align: 'center', stroke: '#2f3b46', sw: 2 });
-  T('Round ' + Math.min(G.round, G.maxRounds) + ' / ' + G.maxRounds, BX + 292, 262, { font: 'bold 12px "Trebuchet MS",Arial', color: '#aeb9c4', align: 'center', stroke: '#2f3b46', sw: 2 });
+  T(limitText(), BX + 292, 262, { font: 'bold 12px "Trebuchet MS",Arial', color: '#aeb9c4', align: 'center', stroke: '#2f3b46', sw: 2 });
 }
 function die(x, y, v, rot, sz = 17) {
   g.save(); g.translate(x, y); g.rotate(rot); g.fillStyle = 'rgba(0,0,0,.28)'; g.fillRect(-sz + 5, -sz + 6, sz * 2, sz * 2); const gr = g.createLinearGradient(-sz, -sz, sz, sz); gr.addColorStop(0, '#fff'); gr.addColorStop(1, '#d4d8de'); g.fillStyle = gr; rr(-sz, -sz, sz * 2, sz * 2, 6); g.fill(); g.strokeStyle = '#9aa2ad'; g.lineWidth = 1; g.stroke();
@@ -616,7 +672,8 @@ function propCard(i, x, y, sz) {
 function drawSide() {
   g.drawImage(I.side, 0, 0);
   T('MONOPOLY', 96, 20, { font: 'bold 20px "Trebuchet MS",Arial', align: 'center', color: '#e02a2a', stroke: '#fff', sw: 4 }); T('The World Edition', 96, 42, { font: 'bold 12px "Trebuchet MS",Arial', align: 'center', color: '#fff', stroke: '#16212b', sw: 3 });
-  T('Round ' + Math.min(G.round, G.maxRounds) + '/' + G.maxRounds, 96, 62, { font: '11px Arial', align: 'center', color: '#dfe8f0' });
+  if (O.fp) T('Free Parking: ' + money(G.pot), 96, 76, { font: '10px Arial', align: 'center', color: '#ffe35a' });
+  T(limitText(), 96, 62, { font: '11px Arial', align: 'center', color: '#dfe8f0' });
   const i = ui.hover >= 0 ? ui.hover : ui.sel; g.fillStyle = 'rgba(28,40,52,.0)';
   if (i >= 0) {
     const s = SP[i], im = I['d' + i]; g.fillStyle = '#fff'; g.fillRect(40, 84, 112, 112); if (im) g.drawImage(im, 42, 86, 108, 108);
@@ -661,6 +718,6 @@ cv.addEventListener('pointerup', e => {
 });
 document.addEventListener('keydown', e => { if (!G) return; if ((e.key === ' ' || e.key === 'Enter') && !D && ui.btn && ui.res) { e.preventDefault(); ui.res('key'); } });
 // ---------- boot ----------
-loadImages().then(() => { window.__mono = { get G() { return G; }, ui, get D() { return D; }, closeDialog, newGame, hitCell, cellC }; newGame(); requestAnimationFrame(frame); });
+loadImages().then(() => { window.__mono = { aiTradeAI, O, get G() { return G; }, ui, get D() { return D; }, closeDialog, newGame, hitCell, cellC }; newGame(); requestAnimationFrame(frame); });
 
 </script></body></html>
