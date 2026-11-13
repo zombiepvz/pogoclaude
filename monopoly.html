@@ -83,8 +83,8 @@ function hitCell(x, y) {
 
 // ---------- players & state ----------
 const SEATS = [
-  { col: '#3fae49', name: 'You', panel: 'br', piece: 15 }, { col: '#e8742a', name: 'Jimmy (CPU)', panel: 'bl', piece: 1 },
-  { col: '#e8c52a', name: 'Jeffery (CPU)', panel: 'tl', piece: 2 }, { col: '#9a74d6', name: 'Sean (CPU)', panel: 'tr', piece: 3 }];
+  { col: '#3fae49', name: 'You', panel: 'br', piece: 15 }, { col: '#e8742a', name: 'Computer_2', panel: 'bl', piece: 1 },
+  { col: '#e8c52a', name: 'Computer_3', panel: 'tl', piece: 2 }, { col: '#9a74d6', name: 'Computer_4', panel: 'tr', piece: 3 }];
 const ODEF = { limit: 'turn', rounds: 25, mins: 20, cash: 1500, fp: false, dblgo: false, auction: true, even: true, jailnorent: false, aitrade: true, seats: ['local', 'cpu', 'cpu', 'cpu'] };
 let O = Object.assign({}, ODEF); try { Object.assign(O, JSON.parse(LS.get('mono.opts') || '{}')); } catch (e) {}
 O.seats = (O.seats || ODEF.seats).map((t, k) => k === 0 ? 'local' : t === 'online' ? 'cpu' : t);
@@ -815,36 +815,100 @@ async function guestJoin(code, onOpen) {
 // ---------- DOM lobby overlay ----------
 const lob = document.createElement('div'); lob.id = 'lobby'; const bdg = document.createElement('div'); bdg.id = 'badge';
 const st = document.createElement('style'); st.textContent = '#lobby{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(6,14,22,.84);z-index:10;font-family:"Trebuchet MS",Arial,sans-serif;color:#e8f2f8}#lobby .card{width:min(580px,92vw);max-height:92vh;overflow:auto;background:#1c3a52;border:2px solid #6fb5d8;border-radius:12px;padding:18px 20px;box-sizing:border-box;box-shadow:0 10px 40px #000a}#lobby h2{margin:0 0 8px;font-size:20px}#lobby p{font-size:13px;line-height:1.4;margin:6px 0}#lobby button{background:linear-gradient(#58c0ee,#1479b0);border:1px solid #0d4d73;color:#fff;font-weight:bold;border-radius:6px;padding:8px 14px;cursor:pointer;margin:6px 6px 0 0;font-size:13px}#lobby button.sec{background:#4b5b68;border-color:#2c3841}#lobby button:disabled{opacity:.5;cursor:default}#lobby textarea{width:100%;box-sizing:border-box;height:62px;font:11px monospace;margin:4px 0;background:#0f2233;color:#cfe8f5;border:1px solid #4a86a8;border-radius:6px;padding:6px;resize:none}#lobby .row{border-top:1px solid #35607c;padding:8px 0}#lobby .ok{color:#7fe28a;font-weight:bold}#lobby .er{color:#ff9d9d}#lobby small{opacity:.8}#badge{position:fixed;left:8px;bottom:8px;z-index:5;font:12px "Trebuchet MS",Arial;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:10px;display:none}';
-document.head.appendChild(st); document.body.appendChild(lob); document.body.appendChild(bdg);
+st.textContent += '#lobby .code{font-size:34px;font-weight:bold;letter-spacing:.25em;color:#ffe27a;margin:4px 0 6px}#lobby input.rc{width:100%;box-sizing:border-box;padding:8px;font:bold 22px "Trebuchet MS",Arial;letter-spacing:.3em;text-transform:uppercase;text-align:center;border-radius:6px;border:1px solid #4a86a8;background:#0f2233;color:#fff}#lobby details{margin-top:10px}#lobby summary{cursor:pointer;font-size:13px;opacity:.85}'; document.head.appendChild(st); document.body.appendChild(lob); document.body.appendChild(bdg);
 function lobbyShow(html, wire) { lob.innerHTML = '<div class="card">' + html + '</div>'; lob.style.display = 'flex'; wire && wire(lob); }
 function lobbyHide() { lob.style.display = 'none'; }
+function PeerC() { return window.__FAKEPEER || window.Peer; }
+function loadPeerLib(cb) {
+  if (PeerC()) { cb(true); return; }
+  const urls = ['https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js', 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js']; let i = 0;
+  const next = () => { if (PeerC()) { cb(true); return; } if (i >= urls.length) { cb(false); return; } const sc = document.createElement('script'); sc.src = urls[i++]; sc.onload = () => PeerC() ? cb(true) : next(); sc.onerror = next; document.head.appendChild(sc); };
+  next();
+}
+function randCode() { const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; let c = ''; for (let i = 0; i < 5; i++) c += A[Math.floor(Math.random() * A.length)]; return c; }
+const RID = c => 'monopoly-room-' + c;
+// host: open a room; guests join with the code and the invite/reply codes are exchanged automatically
+function roomOpen(el, freeConn) {
+  closeRoom(); el.innerHTML = '<small>Opening room…</small>';
+  loadPeerLib(ok => {
+    if (!ok) { el.innerHTML = '<span class="er">Room codes need an internet connection (they use the free PeerJS service). You can use manual codes below instead.</span>'; return; }
+    let tries = 0;
+    const go = () => {
+      const code = randCode(), p = new (PeerC())(RID(code)); net.room = { peer: p, code };
+      p.on('open', () => { el.innerHTML = '<small>Room code — give this to your friends:</small><div class="code">' + code + '</div><small>They choose “Join an online game”, type the code, and are seated automatically.</small>'; });
+      p.on('error', e => { if (e.type === 'unavailable-id' && tries++ < 6) { try { p.destroy(); } catch (x) {} go(); } else el.innerHTML = '<span class="er">Could not open a room (' + (e.type || 'error') + '). You can use manual codes below instead.</span>'; });
+      p.on('connection', pc => {
+        pc.on('data', async m => {
+          if (!m || typeof m !== 'object') return;
+          if (m.t === 'hello') { let c = freeConn(); for (let i = 0; !c && i < 32; i++) { await new Promise(r => setTimeout(r, 250)); c = freeConn(); } if (!c) { pc.send({ t: 'full' }); return; } c.claimed = true; pc._c = c; pc.send({ t: 'offer', seat: c.seat, code: c.code }); clearTimeout(c.rt); c.rt = setTimeout(() => { if (!c.open) c.claimed = false; }, 60000); }
+          else if (m.t === 'answer' && pc._c) { try { await pc._c.pc.setRemoteDescription(await dec(m.code)); } catch (e) { pc._c.claimed = false; try { pc.send({ t: 'err' }); } catch (x) {} } }
+        });
+        pc.on('close', () => { if (pc._c && !pc._c.open && !pc._c.pc.remoteDescription) pc._c.claimed = false; });
+      });
+    };
+    go();
+  });
+}
+function closeRoom() { if (net.room) { try { net.room.peer.destroy(); } catch (e) {} net.room = null; } }
+function joinRoomCode(code, stt, onDone) {
+  code = String(code).toUpperCase().replace(/[^A-Z0-9]/g, ''); if (code.length < 4) { stt.className = 'er'; stt.textContent = 'Enter the room code from the host.'; return; }
+  stt.className = ''; stt.textContent = 'Connecting to room ' + code + '…';
+  loadPeerLib(ok => {
+    if (!ok) { stt.className = 'er'; stt.textContent = 'Could not load the online library. Check your internet connection, or use manual codes.'; return; }
+    const p = new (PeerC())(); let done = false, to;
+    const fail = m => { if (done) return; done = true; clearTimeout(to); stt.className = 'er'; stt.textContent = m; try { p.destroy(); } catch (e) {} onDone && onDone(false); };
+    to = setTimeout(() => fail('Timed out connecting to room ' + code + '.'), 30000);
+    p.on('error', e => fail(e.type === 'peer-unavailable' ? 'Room ' + code + ' was not found. Check the code with the host.' : 'Online service unavailable (' + (e.type || 'error') + ').'));
+    p.on('open', () => {
+      const c = p.connect(RID(code), { reliable: true });
+      c.on('open', () => c.send({ t: 'hello' }));
+      c.on('data', async m => {
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'offer') {
+          try { stt.textContent = 'Joining Seat ' + (m.seat + 1) + '…'; const ans = await guestJoin(m.code, () => { done = true; clearTimeout(to); lobbyHide(); try { p.destroy(); } catch (e) {} }); c.send({ t: 'answer', code: ans }); }
+          catch (e) { fail('Could not connect: ' + e.message); }
+        } else if (m.t === 'full') fail('That room is full or the game has already started.');
+        else if (m.t === 'err') fail('The connection failed. Ask the host to check the room and try again.');
+      });
+    });
+  });
+}
 function badge(t) { bdg.textContent = t; bdg.style.display = t ? 'block' : 'none'; }
 const $ = (r, s) => r.querySelector(s);
 function copyBtn(btn, ta) { btn.onclick = () => { ta.select(); try { navigator.clipboard.writeText(ta.value); } catch (e) { document.execCommand('copy'); } btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy', 1200); }; }
 function showMenu() {
-  lobbyShow('<h2>MONOPOLY — The World Edition</h2><p>Play against the computer, share this screen with friends (local), or play with friends online.</p><button id="mp">Play</button><button id="mj" class="sec">Join an online game</button><p><small>To host an online game press Play and set a seat to “Online player”.</small></p>', l => {
+  lobbyShow('<h2>MONOPOLY — The World Edition</h2><p>Play against the computer, share this screen with friends (local), or play with friends online.</p><button id="mp">Play</button><button id="mj" class="sec">Join an online game</button><p><small>To host: press Play and set a seat to “Online player” — you will get a room code to share. To join: choose “Join an online game” and type the code.</small></p>', l => {
     $(l, '#mp').onclick = () => { lobbyHide(); newGame(); };
     $(l, '#mj').onclick = joinScreen;
   });
 }
 function joinScreen() {
-  lobbyShow('<h2>Join an online game</h2><p>1. Paste the <b>invite code</b> from the host.<br>2. Press <b>Create reply code</b>, copy it, and send it back to the host.<br>3. Keep this page open — the game appears when the host connects you.</p><input id="gn" maxlength="14" placeholder="Your screen name" style="width:100%;box-sizing:border-box;padding:6px;margin-bottom:6px;border-radius:6px;border:1px solid #4a86a8;background:#0f2233;color:#fff"><textarea id="ic" placeholder="Paste invite code here"></textarea><button id="mk">Create reply code</button><textarea id="rc" readonly placeholder="Your reply code appears here"></textarea><button id="cp">Copy</button><button id="bk" class="sec">Back</button><p id="stt"></p>', l => {
+  lobbyShow('<h2>Join an online game</h2><input id="gn" maxlength="14" placeholder="Your screen name" style="width:100%;box-sizing:border-box;padding:6px;margin-bottom:8px;border-radius:6px;border:1px solid #4a86a8;background:#0f2233;color:#fff"><p>Enter the <b>room code</b> the host gave you:</p><input id="rcode" class="rc" maxlength="5" placeholder="ABCDE" autocomplete="off" spellcheck="false"><button id="jr">Join room</button><button id="bk" class="sec">Back</button><p id="stt"></p><details><summary>No room code? Use manual codes instead</summary><p>1. Paste the <b>invite code</b> from the host.<br>2. Press <b>Create reply code</b>, copy it, and send it back to the host.<br>3. Keep this page open — the game appears when the host connects you.</p><textarea id="ic" placeholder="Paste invite code here"></textarea><button id="mk">Create reply code</button><textarea id="rc" readonly placeholder="Your reply code appears here"></textarea><button id="cp">Copy</button><p id="stt2"></p></details>', l => {
     const gn = $(l, '#gn'); gn.value = myName(); gn.oninput = () => { try { LS.set('mono.name', cleanName(gn.value)); } catch (e) {} };
-    const ic = $(l, '#ic'), rc = $(l, '#rc'), stt = $(l, '#stt'); copyBtn($(l, '#cp'), rc);
+    const ic = $(l, '#ic'), rc = $(l, '#rc'), stt = $(l, '#stt'), stt2 = $(l, '#stt2'), rcode = $(l, '#rcode'), jr = $(l, '#jr'); copyBtn($(l, '#cp'), rc);
+    rcode.oninput = () => { rcode.value = rcode.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+    rcode.onkeydown = e => { if (e.key === 'Enter') jr.click(); };
+    jr.onclick = () => { jr.disabled = true; joinRoomCode(rcode.value, stt, () => { jr.disabled = false; }); setTimeout(() => { jr.disabled = false; }, 31000); };
     $(l, '#bk').onclick = showMenu;
     $(l, '#mk').onclick = async () => {
-      stt.className = ''; stt.textContent = 'Working…';
-      try { rc.value = await guestJoin(ic.value, () => { lobbyHide(); }); stt.textContent = 'Send the reply code to the host, then wait for the connection…'; }
-      catch (e) { stt.className = 'er'; stt.textContent = 'Could not use that code: ' + e.message; }
+      stt2.className = ''; stt2.textContent = 'Working…';
+      try { rc.value = await guestJoin(ic.value, () => { lobbyHide(); }); stt2.textContent = 'Send the reply code to the host, then wait for the connection…'; }
+      catch (e) { stt2.className = 'er'; stt2.textContent = 'Could not use that code: ' + e.message; }
     };
+    setTimeout(() => rcode.focus(), 50);
   });
 }
 function hostPanel() {
   return new Promise(resolve => {
     net.role = 'host'; const seats = [1, 2, 3].filter(k => O.seats[k] === 'online'); net.conns.filter(c => !seats.includes(c.seat)).forEach(c => { try { c.dc.close(); c.pc.close(); } catch (e) {} net.conns = net.conns.filter(x => x !== c); });
     let rows = ''; seats.forEach(k => { rows += '<div class="row" id="r' + k + '"><b>Seat ' + (k + 1) + '</b> <span class="s" id="s' + k + '">Preparing invite…</span><div class="body"></div></div>'; });
-    lobbyShow('<h2>Invite online players</h2><p>For each seat: send the <b>invite code</b> to a friend. They open this game, choose “Join an online game”, paste it, and send you a <b>reply code</b>. Paste that reply below and press Connect.</p>' + rows + '<div><button id="go" disabled>Start game</button><button id="no" class="sec">Back</button></div><p><small>Keep this tab open and in front while you play: the game runs here and is streamed to your guests.</small></p>', l => {
-      const go = $(l, '#go'), chk = () => { go.disabled = !seats.every(k => net.conns.some(c => c.seat === k && c.open)); };
+    lobbyShow('<h2>Invite online players</h2><div id="rm" class="row"></div><div id="seatlist"></div><details><summary>Manual codes (advanced / no internet service)</summary><p><small>For each seat, send the <b>invite code</b> to a friend; they choose “Join an online game” &rarr; manual codes, paste it and send back a <b>reply code</b>. Paste the reply and press Connect.</small></p>' + rows + '</details><div><button id="go" disabled>Start game</button><button id="no" class="sec">Back</button></div><p><small>Keep this tab open and in front while you play: the game runs here and is streamed to your guests.</small></p>', l => {
+      const go = $(l, '#go'), sl = $(l, '#seatlist'), chk = () => {
+        go.disabled = !seats.every(k => net.conns.some(c => c.seat === k && c.open));
+        sl.innerHTML = seats.map(k => { const c = net.conns.find(x => x.seat === k); const ok = c && c.open; return '<div class="row"><b>Seat ' + (k + 1) + '</b> &nbsp; <span class="' + (ok ? 'ok' : '') + '">' + (ok ? 'Connected ✓' : (c && c.claimed ? 'Player joining…' : 'Waiting for a player')) + '</span></div>'; }).join('');
+      };
+      const tick = setInterval(() => { if (lob.style.display === 'none') { clearInterval(tick); return; } chk(); }, 500);
+      roomOpen($(l, '#rm'), () => net.conns.find(c => seats.includes(c.seat) && !c.open && !c.claimed && c.code));
       seats.forEach(async k => {
         const row = $(l, '#r' + k), body = $(row, '.body'), stt = $(row, '.s'); let c = net.conns.find(x => x.seat === k && x.open);
         if (c) { stt.className = 's ok'; stt.textContent = 'Connected ✓'; c.onlost = () => { stt.className = 's er'; stt.textContent = 'Disconnected'; chk(); }; chk(); return; }
@@ -853,10 +917,12 @@ function hostPanel() {
         body.innerHTML = '<small>Invite code (send to your friend):</small><textarea readonly></textarea><button class="cp">Copy</button><br><small>Their reply code:</small><textarea class="rep" placeholder="Paste the reply code here"></textarea><button class="cn">Connect</button>';
         const ta = body.querySelector('textarea'); ta.value = c.code; copyBtn(body.querySelector('.cp'), ta);
         c.onopen = () => { stt.className = 's ok'; stt.textContent = 'Connected ✓'; body.style.display = 'none'; chk(); }; c.onlost = () => { stt.className = 's er'; stt.textContent = 'Disconnected'; chk(); };
-        body.querySelector('.cn').onclick = async () => { try { stt.textContent = 'Connecting…'; await c.pc.setRemoteDescription(await dec(body.querySelector('.rep').value)); } catch (e) { stt.className = 's er'; stt.textContent = 'Bad reply code: ' + e.message; } };
+        body.querySelector('.cn').onclick = async () => { try { stt.textContent = 'Connecting…'; c.claimed = true; await c.pc.setRemoteDescription(await dec(body.querySelector('.rep').value)); } catch (e) { c.claimed = false; stt.className = 's er'; stt.textContent = 'Bad reply code: ' + e.message; } };
+        chk();
       });
-      go.onclick = () => { lobbyHide(); resolve(true); };
-      $(l, '#no').onclick = () => { netReset(); lobbyHide(); resolve(false); };
+      chk();
+      go.onclick = () => { clearInterval(tick); closeRoom(); lobbyHide(); resolve(true); };
+      $(l, '#no').onclick = () => { clearInterval(tick); closeRoom(); netReset(); lobbyHide(); resolve(false); };
     });
   });
 }
